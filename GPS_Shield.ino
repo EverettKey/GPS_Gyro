@@ -10,6 +10,14 @@
 
 const int MPU_addr=0x68; // I2C address of the MPU-6050
 int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ;
+const int ledPin = 13;
+const int buttonPin = 3;
+int logState = LOW;
+int buttonState = LOW;
+int lastButtonState;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
+int lightState = LOW;
 /////////////////////////
 // Log File Defintions //
 /////////////////////////
@@ -61,6 +69,8 @@ SoftwareSerial ssGPS(ARDUINO_GPS_TX, ARDUINO_GPS_RX); // Create a SoftwareSerial
 
 void setup()
 {
+  pinMode(ledPin, OUTPUT);
+  pinMode(buttonPin, INPUT);
   Wire.begin();
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x6B);  // PWR_MGMT_1 register
@@ -74,48 +84,24 @@ void setup()
   {
     SerialMonitor.println(F("Error initializing SD card."));
   }
-  updateFileName(); // Each time we start, create a new file, increment the number
-//  printHeader(); // Print a header at the top of the new file
-  File logFile = SD.open(logFileName, FILE_WRITE);
-  logFile.println(COLUMN_NAMES);
-  logFile.close();
-  
 }
 
-void loop()
-{
-  if ((lastLog + LOG_RATE) <= millis())
-  { // If it's been LOG_RATE milliseconds since the last log:
-    lastLog = millis(); // Update the lastLog variable
-    logIMUData();
-    if (tinyGPS.location.isUpdated()) // If the GPS data is vaild
-    {
-      if (logGPSData()) // Log the GPS data
-      {
-        SerialMonitor.println(F("GPS logged.")); // Print a debug message
+void checkLogState(){
+  int buttonReading = digitalRead(buttonPin);
+  if(buttonReading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  if(debounceDelay + lastDebounceTime < millis()){
+    if (buttonReading != buttonState) {
+      buttonState = buttonReading;
+      if(buttonState == HIGH){
+        logState = !logState;
       }
-      else // If we failed to log GPS
-      { // Print an error, don't update lastLog   
-        SerialMonitor.println(F("Failed to log new GPS data."));
-      }
-    }
-    else // If GPS data isn't valid
-    {
-      File logFile = SD.open(logFileName, FILE_WRITE); // Open the log file
-      for(int i = 0; i < 8; i++){
-        logFile.print(comma);
-      }
-      logFile.println();
-      logFile.close();
-      // Print a debug message. Maybe we don't have enough satellites yet.
-      SerialMonitor.print(F("No GPS data. Sats: "));
-      SerialMonitor.println(tinyGPS.satellites.value());
     }
   }
-
-  // If we're not logging, continue to "feed" the tinyGPS object:
-  while (gpsPort.available())
-    tinyGPS.encode(gpsPort.read());
+  digitalWrite(ledPin, logState);
+  Serial.print(logState);
+  lastButtonState = buttonReading;
 }
 
 byte logGPSData()
@@ -174,7 +160,7 @@ void logIMUData(){
 
 // updateFileName() - Looks through the log files already present on a card,
 // and creates a new file with an incremented file index.
-void updateFileName()
+void makeNewFile()
 {
   int i = 0;
   for (; i < MAX_LOG_FILES; i++)
@@ -194,4 +180,57 @@ void updateFileName()
   }
   SerialMonitor.print(F("File name: "));
   SerialMonitor.println(logFileName); // Debug print the file name
+  File logFile = SD.open(logFileName, FILE_WRITE);
+  logFile.println(COLUMN_NAMES);
+  logFile.close();
 }
+
+void feedGPS(){
+  while(gpsPort.available()){
+    tinyGPS.encode(gpsPort.read());
+  }
+}
+
+void loop()
+{
+  checkLogState();
+  if(logState == HIGH){
+    makeNewFile();
+    while(logState == HIGH){
+      if ((lastLog + LOG_RATE) <= millis())
+      { // If it's been LOG_RATE milliseconds since the last log:
+        lastLog = millis(); // Update the lastLog variable
+        logIMUData(); 
+        if (tinyGPS.location.isUpdated()) // If the GPS data is vaild
+        {
+          if (logGPSData()) // Log the GPS data
+          {
+            SerialMonitor.println(F("GPS logged.")); // Print a debug message
+          }
+          else // If we failed to log GPS
+          { // Print an error, don't update lastLog   
+            SerialMonitor.println(F("Failed to log new GPS data."));
+          }
+        }
+        else // If GPS data isn't valid
+        {
+          File logFile = SD.open(logFileName, FILE_WRITE); // Open the log file
+          for(int i = 0; i < 8; i++){
+            logFile.print(comma);
+          }
+          logFile.println();
+          logFile.close();
+          // Print a debug message. Maybe we don't have enough satellites yet.
+          SerialMonitor.print(F("No GPS data. Sats: "));
+          SerialMonitor.println(tinyGPS.satellites.value());
+        }
+      }
+      checkLogState();
+      feedGPS();
+    }
+  }
+  feedGPS();
+}
+//  // If we're not logging, continue to "feed" the tinyGPS object:
+//  while (gpsPort.available())
+//    tinyGPS.encode(gpsPort.read());
